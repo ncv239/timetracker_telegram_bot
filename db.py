@@ -14,6 +14,38 @@ PROJECTLIST = [
 ]
 
 class StatsDB():
+    ''' Database class to keep track of records and store them in REPLIT key-value pair database
+    in order to use it you must:
+        - install replit library 
+            $ pip install replit
+        - set url to the replit database in env-var
+            $ export REPLIT_DB_URL="your URL gathered in replit website"
+
+        Database Strucute:
+        {
+            telegram_user_id_1: 
+                {telegram_user_name: "my-user-name",
+                 logs: [
+                    [topic, start, stop, pause, duration],
+                    [topic, start, stop, pause, duration],
+                    [topic, start, stop, pause, duration], ...
+                 ],
+                 projects: [prj1, prj2, prj3, ...],
+                 timezone: 2
+                },
+
+            telegram_user_id_2: 
+                {telegram_user_name: "my-user-name",
+                 logs: [
+                    [topic, start, stop, pause, duration],
+                    [topic, start, stop, pause, duration],
+                    [topic, start, stop, pause, duration], ...
+                 ],
+                 projects: [prj1, prj2, prj3, ...],
+                 timezone: 2
+                }, ...
+        }
+    '''
     def __init__(self):
         self.db = db
         self._default_user = {"user_name": "", "logs": {}, "projects": PROJECTLIST, "timezone": 0}
