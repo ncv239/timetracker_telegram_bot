@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 # Stages
-ZERO, FIRST, SECOND, THIRD, ADDING_PROJECT, REMOVING_PROJECT, SETTING_TZ = range(7)
+ZERO, STATE_START, SECOND, STATE_TIMER_STARTED, STATE_ADDING_PROJECT, STATE_REMOVING_PROJECT, STATE_SETTING_TZ = range(7)
 
 
 # Callback data
@@ -49,7 +49,7 @@ KEYBOARD_TIMER_PAUSED = [[
 
 KEYBOARD_LOGS = [[
         InlineKeyboardButton("🗑 Reset", callback_data="##reset_stats"),
-        InlineKeyboardButton("Back", callback_data="##start_over"),
+        InlineKeyboardButton("↩ Back", callback_data="##start_over"),
     ]]
 
 KEYBOARD_SETTINGS = [[
@@ -58,7 +58,7 @@ KEYBOARD_SETTINGS = [[
     ], [
         InlineKeyboardButton("Timezone", callback_data="##timezone")
     ], [
-        InlineKeyboardButton("Back", callback_data="##start_over"),
+        InlineKeyboardButton("↩ Back", callback_data="##start_over"),
     ]]
 
 
@@ -80,7 +80,7 @@ def start(update: Update, context: CallbackContext) -> int:
     else:
         logger.info("User %s started the conversation.", "SCRIPT")
     update.message.reply_text("Welcome to Time Tracker", reply_markup=InlineKeyboardMarkup(KEYBOARD_START))
-    return FIRST
+    return STATE_START
 
 
 def record(update: Update, context: CallbackContext) -> int:
@@ -101,7 +101,7 @@ def start_timer(update: Update, context: CallbackContext) -> int:
         text=f'''Timer started
         📝 project: {context.user_data["prj"]}
         📅 start: {dtprint(context.user_data["start"], db.get_timezone(str(update.effective_user.id)))}''', reply_markup=InlineKeyboardMarkup(KEYBOARD_TIMER_STARTED))
-    return THIRD
+    return STATE_TIMER_STARTED
 
 def stop_timer(update: Update, context: CallbackContext) -> int:
     user = update.effective_user
@@ -138,7 +138,7 @@ def pause_timer(update: Update, context: CallbackContext) -> int:
         📅 start:  {dtprint(context.user_data["start"], db.get_timezone(str(update.effective_user.id)))}
         📅 paused: {dtprint(context.user_data["pause_start"], db.get_timezone(str(update.effective_user.id)))}''',
         reply_markup=InlineKeyboardMarkup(KEYBOARD_TIMER_PAUSED))
-    return FIRST
+    return STATE_START
 
 
 def resume_timer(update: Update, context: CallbackContext) -> int:
@@ -154,7 +154,7 @@ def resume_timer(update: Update, context: CallbackContext) -> int:
         📝 project: {context.user_data["prj"]}
         📅 start:  {dtprint(context.user_data["start"], db.get_timezone(str(update.effective_user.id)))}
         🕓 pause: {dtprint(context.user_data["pause"], db.get_timezone(str(update.effective_user.id)))}''', reply_markup=InlineKeyboardMarkup(KEYBOARD_TIMER_STARTED))
-    return THIRD
+    return STATE_TIMER_STARTED
 
     
 def stats(update: Update, context: CallbackContext) -> int:
@@ -179,7 +179,7 @@ def start_over(update: Update, context: CallbackContext) -> int:
         update.callback_query.edit_message_text(text="Welcome to Time Tracker", reply_markup=InlineKeyboardMarkup(KEYBOARD_START))
     else:
         context.bot.send_message(update.effective_user.id, text="Welcome to Time Tracker", reply_markup=InlineKeyboardMarkup(KEYBOARD_START))
-    return FIRST
+    return STATE_START
 
 def settings(update: Update, context: CallbackContext) -> int:
     user = update.effective_user
@@ -192,7 +192,7 @@ def settings_remove_project_choose(update: Update, context: CallbackContext) -> 
     keyboard = [[InlineKeyboardButton(pr, callback_data=pr)] for pr in db.get_projects(str(user.id))]
     msg = "Choose a project to delete from database (entries will be preserved)"
     update.callback_query.edit_message_text(text=msg, reply_markup=InlineKeyboardMarkup(keyboard))
-    return REMOVING_PROJECT
+    return STATE_REMOVING_PROJECT
 
 
 def settings_remove_project_confirm(update: Update, context: CallbackContext) -> int:
@@ -207,7 +207,7 @@ def settings_add_project_choose(update: Update, context: CallbackContext) -> int
     user = update.effective_user
     msg = "Please type a name of your new project"
     update.callback_query.edit_message_text(text=msg, reply_markup=None)
-    return ADDING_PROJECT
+    return STATE_ADDING_PROJECT
 
 
 def settings_add_project_confirm(update: Update, context: CallbackContext) -> int:
@@ -216,11 +216,11 @@ def settings_add_project_confirm(update: Update, context: CallbackContext) -> in
     return start_over(update, context)
 
 
-def settings_set_timezone(update: Update, cintext: CallbackContext) -> int:
+def settings_set_timezone(update: Update, context: CallbackContext) -> int:
     user = update.effective_user
     msg = f"Current timezone offset is set to +{db.get_timezone(str(update.effective_user.id))}.\n\nPlease enter the new timezone offset (set 0 for UTC)"
     update.callback_query.edit_message_text(text=msg, reply_markup=None)
-    return SETTING_TZ
+    return STATE_SETTING_TZ
 
 
 def settings_set_timezone_confirm(update: Update, context: CallbackContext) -> int:
@@ -229,7 +229,7 @@ def settings_set_timezone_confirm(update: Update, context: CallbackContext) -> i
         offset = int(update.message.text)
     except:
         update.callback_query.edit_message_text(text="Please enter an integer!", reply_markup=None)
-        return SETTING_TZ
+        return STATE_SETTING_TZ
 
     db.set_timezone(str(user.id), offset)
     return start_over(update, context)
@@ -244,7 +244,7 @@ def main(BOT_API_TOKEN) -> None:
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            FIRST: [
+            STATE_START: [
                 CallbackQueryHandler(record, pattern='^' + str(ONE) + '$'),
                 CallbackQueryHandler(stats, pattern='^' + str(TWO) + '$'),
                 CallbackQueryHandler(resume_timer, pattern="##resume_timer"),
@@ -258,17 +258,17 @@ def main(BOT_API_TOKEN) -> None:
                 CallbackQueryHandler(settings_set_timezone, pattern='##timezone'),
                 CallbackQueryHandler(start_timer),
             ],
-            THIRD: [
+            STATE_TIMER_STARTED: [
                 CallbackQueryHandler(pause_timer, pattern="##pause_timer"),
                 CallbackQueryHandler(stop_timer, pattern="##stop_timer"),
             ],
-            ADDING_PROJECT: [
+            STATE_ADDING_PROJECT: [
                 MessageHandler(Filters.all, settings_add_project_confirm),
             ],
-            REMOVING_PROJECT: [
+            STATE_REMOVING_PROJECT: [
                 CallbackQueryHandler(settings_remove_project_confirm),
             ],
-            SETTING_TZ: [
+            STATE_SETTING_TZ: [
                 MessageHandler(Filters.all, settings_set_timezone_confirm),
             ],
         },
