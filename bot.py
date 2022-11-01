@@ -29,7 +29,7 @@ from helpers import now_timestamp, timestamp_to_str, timedelta_to_str, aggregate
 
 
 # Enable logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
+logging.basicConfig(filename="log.log", format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
@@ -40,8 +40,8 @@ STATE_SETTING_TZ, STATE_PRJ_SELECTED, STATE_LOG_MENU_ENTERED, STATE_SETTINGS_OPE
 
 # Callback data
 GOTO_RECORD, GOTO_LOGS, GOTO_SETTINGS, GOTO_TIMER_PAUSE, GOTO_TIMER_STOP, \
-GOTO_TIMER_RESUME, GOTO_RESET, GOTO_LOGS_LIST, \
-GOTO_MAIN_MENU, GOTO_SETTINGS_ADD_PRJ, GOTO_SETTINGS_DEL_PRJ, GOTO_SETTINGS_SET_TZ = [str(i) for i in range(12)]
+GOTO_TIMER_RESUME, GOTO_RESET, GOTO_LOGS_LIST, GOTO_LOGS_EXPORT, \
+GOTO_MAIN_MENU, GOTO_SETTINGS_ADD_PRJ, GOTO_SETTINGS_DEL_PRJ, GOTO_SETTINGS_SET_TZ = [str(i) for i in range(13)]
 
 
 
@@ -65,6 +65,8 @@ KEYBOARD_TIMER_PAUSED = InlineKeyboardMarkup([[
 
 KEYBOARD_LOGS = InlineKeyboardMarkup([[
         InlineKeyboardButton("List all logs", callback_data=GOTO_LOGS_LIST),
+    ],[
+        InlineKeyboardButton("Export as CSV", callback_data=GOTO_LOGS_EXPORT),
     ],[
         InlineKeyboardButton("🗑 Reset", callback_data=GOTO_RESET),
         InlineKeyboardButton("↩ Back", callback_data=GOTO_MAIN_MENU),
@@ -260,11 +262,20 @@ async def logs_list_table(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # logic to aggregate logs
     log_list, msg = list_user_logs(context)
+    # update the logs section
+    await query.edit_message_text(text=msg, reply_markup=KEYBOARD_LOGS)
+    return STATE_LOG_MENU_ENTERED
+
+async def logs_list_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    # answer query
+    await query.answer()
+
+    # logic to aggregate logs
+    log_list, msg = list_user_logs(context)
     filename = save_list_of_rows_to_csv(log_list, "export.csv")
     
     # update the logs section
-    
-    await query.edit_message_text(text=msg, reply_markup=KEYBOARD_LOGS)
     await context.bot.send_document(query["message"]["chat"].id, document=open(filename, "rb"))
     return STATE_LOG_MENU_ENTERED
 
@@ -397,6 +408,7 @@ def main(BOT_API_TOKEN) -> None:
             ],
             STATE_LOG_MENU_ENTERED: [
                 CallbackQueryHandler(logs_list_table, pattern=GOTO_LOGS_LIST),
+                CallbackQueryHandler(logs_list_export, pattern=GOTO_LOGS_EXPORT),
                 CallbackQueryHandler(reset_logs, pattern=GOTO_RESET),
                 CallbackQueryHandler(start, pattern=GOTO_MAIN_MENU),
             ],
