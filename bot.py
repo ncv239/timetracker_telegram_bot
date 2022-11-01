@@ -1,6 +1,5 @@
 import logging
-import os
-from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from telegram import __version__ as TG_VER
 try:
@@ -13,8 +12,6 @@ if __version_info__ < (20, 0, 0, "alpha", 1):
         f"{TG_VER} version of this example, "
         f"visit https://docs.python-telegram-bot.org/en/v{TG_VER}/examples.html"
     )
-from uuid import uuid4
-from itertools import groupby
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -401,14 +398,10 @@ def main(BOT_API_TOKEN) -> None:
         fallbacks=[CommandHandler('start', start)],
     )
 
-    # Add ConversationHandler to dispatcher that will be used for handling updates
+    # Register conv handler
     application.add_handler(conv_handler)
 
     # Start the Bot
     #application.run_polling()
 
     return application
-
-if __name__ == '__main__':
-    upd = main(os.environ['BOT_API_KEY'])
-    upd.idle()
