@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from db import StatsDB
+
 from telegram import __version__ as TG_VER
 try:
     from telegram import __version_info__
@@ -13,6 +13,8 @@ if __version_info__ < (20, 0, 0, "alpha", 1):
         f"{TG_VER} version of this example, "
         f"visit https://docs.python-telegram-bot.org/en/v{TG_VER}/examples.html"
     )
+from uuid import uuid4
+from itertools import groupby
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -23,258 +25,373 @@ from telegram.ext import (
     ConversationHandler,
     MessageHandler,
     filters,
+    PicklePersistence
 )
 
-
-# Create a database handler
-db = StatsDB()
+from helpers import now_timestamp, timestamp_to_str, timedelta_to_str, aggregate_user_logs, init_user_data, reset_user_data
 
 
 # Enable logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
+logging.basicConfig(encoding='utf-8', format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
-# Stages
-ZERO, STATE_START, SECOND, STATE_TIMER_STARTED, STATE_ADDING_PROJECT, STATE_REMOVING_PROJECT, STATE_SETTING_TZ = range(7)
+# Conversation Stages
+STATE_START, STATE_TIMER_STARTED, STATE_ADDING_PROJECT, STATE_SETTINGS_DEL_PRJ, \
+STATE_SETTING_TZ, STATE_PRJ_SELECTED, STATE_LOG_MENU_ENTERED, STATE_SETTINGS_OPENED = [str(i) for i in range(8)]
 
 
 # Callback data
-ONE, TWO, THREE, FOUR = range(4)
+GOTO_RECORD, GOTO_LOGS, GOTO_SETTINGS, GOTO_TIMER_PAUSE, GOTO_TIMER_STOP, \
+GOTO_TIMER_RESUME, GOTO_RESET, \
+GOTO_MAIN_MENU, GOTO_SETTINGS_ADD_PRJ, GOTO_SETTINGS_DEL_PRJ, GOTO_SETTINGS_SET_TZ = [str(i) for i in range(11)]
+
+
+
 
 
 # Define static inline Keybords
-KEYBOARD_START = [[
-        InlineKeyboardButton("⏺ Record", callback_data=str(ONE)),
-        InlineKeyboardButton("📊 Logs", callback_data=str(TWO)),
-        InlineKeyboardButton("⚙️", callback_data="##settings"),
-    ]]
+KEYBOARD_START = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⏺ Record", callback_data=GOTO_RECORD),
+        InlineKeyboardButton("📊 Logs", callback_data=GOTO_LOGS),
+        InlineKeyboardButton("⚙️", callback_data=GOTO_SETTINGS),
+    ]])
 
-KEYBOARD_TIMER_STARTED = [[
-        InlineKeyboardButton("⏸", callback_data="##pause_timer"),
-        InlineKeyboardButton("⏹", callback_data="##stop_timer"),
-    ]]
+KEYBOARD_TIMER_STARTED = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⏸", callback_data=GOTO_TIMER_PAUSE),
+        InlineKeyboardButton("⏹", callback_data=GOTO_TIMER_STOP),
+    ]])
 
-KEYBOARD_TIMER_PAUSED = [[
-        InlineKeyboardButton("⏯", callback_data="##resume_timer"),
-    ]]
+KEYBOARD_TIMER_PAUSED = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⏯", callback_data=GOTO_TIMER_RESUME),
+    ]])
 
-KEYBOARD_LOGS = [[
-        InlineKeyboardButton("🗑 Reset", callback_data="##reset_stats"),
-        InlineKeyboardButton("↩ Back", callback_data="##start_over"),
-    ]]
+KEYBOARD_LOGS = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🗑 Reset", callback_data=GOTO_RESET),
+        InlineKeyboardButton("↩ Back", callback_data=GOTO_MAIN_MENU),
+    ]])
 
-KEYBOARD_SETTINGS = [[
-        InlineKeyboardButton("Add Project", callback_data="##settings_add_project"),
-        InlineKeyboardButton("Remove Project", callback_data="##settings_remove_project"),
+KEYBOARD_SETTINGS = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Add Project", callback_data=GOTO_SETTINGS_ADD_PRJ),
+        InlineKeyboardButton("Remove Project", callback_data=GOTO_SETTINGS_DEL_PRJ),
     ], [
-        InlineKeyboardButton("Timezone", callback_data="##timezone")
+        InlineKeyboardButton("Timezone", callback_data=GOTO_SETTINGS_SET_TZ)
     ], [
-        InlineKeyboardButton("↩ Back", callback_data="##start_over"),
-    ]]
+        InlineKeyboardButton("↩ Back", callback_data=GOTO_MAIN_MENU),
+    ]])
 
 
-def dtprint(dt, tz_offset=0) -> str:
-    print("current tz_offset=", tz_offset)
-    if type(dt) is datetime:
-        return dt.astimezone(tz=timezone(timedelta(hours=tz_offset))).strftime("%d-%m-%Y %H:%M")
-    elif type(dt) is timedelta:
-        return timedelta(days=dt.days, seconds=dt.seconds)
-    else:
-        return ""
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message is not None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE, start_over: bool = False) -> int:
+    ''' Initial callback function when we want to start the bot
+
+    Args:
+        update
+        context
+        start_over: bool - a flag to force bot to end ciurrent conversation and start a new one.
+                            Useful, when you want to save a message instead of updating it
+
+    '''
+    if update.message:  # user wrote something (probably /start)
         user = update.message.from_user
         logger.info("User %s started the conversation.", user.username)
-        db.add_user(str(user.id), user.username)
-    else:
+        logger.info("update.message is not None")
+
+        # create initial user database
+        init_user_data(context)
+        # send a new message and start a conversation
+        await context.bot.send_message(update.effective_user.id, text="Welcome to Time Tracker", reply_markup=KEYBOARD_START)
+
+    else:  # user didnt write anything
         logger.info("User %s started the conversation.", "SCRIPT")
-    await update.message.reply_text("Welcome to Time Tracker", reply_markup=InlineKeyboardMarkup(KEYBOARD_START))
+        logger.info("update.message is None")
+
+        query = update.callback_query
+        if query and not start_over:  # user pressed inline-keyboard-btn and we receive a query
+            logger.info("update.callback_query is not None")
+            logger.info(query.to_json())
+            # answer the query
+            await query.answer()
+            # update the current conversation message
+            await query.edit_message_text("Welcome to Time Tracker", reply_markup=KEYBOARD_START)
+        else:  # user didnt press anything, hard-coded start over
+            logger.info("update.callback_query is None")
+            # send a new message and start a conversation
+            await context.bot.send_message(update.effective_user.id, text="Welcome to Time Tracker", reply_markup=KEYBOARD_START)
     return STATE_START
 
 
 async def record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # answer a query (when user clicked an inline-button)
     await update.callback_query.answer()
-    keyboard = [[InlineKeyboardButton(pr, callback_data=pr)] for pr in db.get_projects(str(update.effective_user.id))]
+    logger.info(f"RECORD PRESSED: upd={update.to_json()}")
+    # build a keyboard with list of all projects from user database, note that the project name will be send as a callback_data
+    keyboard = [[InlineKeyboardButton(prj, callback_data=prj)] for prj in context.user_data["settings"]["projects"]]
+    keyboard.append([InlineKeyboardButton("↩ Back", callback_data=GOTO_MAIN_MENU)])
+
+    # update message and a keyboard
     await update.callback_query.edit_message_text(text="Select project to track", reply_markup=InlineKeyboardMarkup(keyboard))
-    return SECOND
+
+    # return a pointer to the next state in the conversation
+    return STATE_PRJ_SELECTED
 
 
 async def start_timer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
+
+    # answer the query
     await query.answer()
-    context.user_data["start"] = datetime.now()
-    # context.user_data["start"] = query.message.edit_date
-    context.user_data["prj"] = query.data  # store the selected project
+
+    # start a log entry
+    log_id = uuid4()
+    context.user_data["logs"][log_id] = {}
+    #context.user_data["logs"][log_id]["start"] = query.message.edit_date  # integer, epoch time
+    context.user_data["logs"][log_id]["name"] = query.data  # name of the project (callback data)
+    context.user_data["logs"][log_id]["start"] = now_timestamp()  # integer, epoch time
+    context.user_data["logs"][log_id]["stop"] = context.user_data["logs"][log_id]["start"]  # DEFAULT VALUE
+    context.user_data["logs"][log_id]["pause"] = 0
+
+    # store the key of current log for quick access
+    context.user_data["recording"] = log_id
+
+    # edit the message
     await query.edit_message_text(
         text=f'''Timer started
-        📝 project: {context.user_data["prj"]}
-        📅 start: {dtprint(context.user_data["start"], db.get_timezone(str(update.effective_user.id)))}''', reply_markup=InlineKeyboardMarkup(KEYBOARD_TIMER_STARTED))
+        📝 project: {context.user_data["logs"][log_id]["name"]}
+        📅 start: {timestamp_to_str(context.user_data["logs"][log_id]["start"], tz=context.user_data["settings"]["timezone"],
+                    fmt="%d-%m-%Y %H:%M:%S")}''',
+        reply_markup=KEYBOARD_TIMER_STARTED)
+
     return STATE_TIMER_STARTED
 
+
 async def stop_timer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
+    # answer the query
     query = update.callback_query
-    await query.answer()
-    context.user_data["stop"] = datetime.now()
-    # context.user_data["stop"] = query.message.edit_date
-    if not "pause" in context.user_data:
-        context.user_data["pause"] = timedelta()
-    context.user_data["duration"] = context.user_data["stop"]-context.user_data["start"]-context.user_data["pause"]
+    await query.answer(text="Timer stopped")
 
-    db.add_log(str(user.id), context.user_data["prj"], context.user_data["start"], context.user_data["stop"], context.user_data["pause"], context.user_data["duration"])
+    # add stop log to the user_data
+    log_id = context.user_data["recording"]
+    context.user_data["logs"][log_id]["stop"] = now_timestamp()
 
-    msg_txt = f'''Timer stopped. Log created:
-        📝 project:  {context.user_data["prj"]}
-        📅 start:    {dtprint(context.user_data["start"], db.get_timezone(str(update.effective_user.id)))}
-        📅 stop:     {dtprint(context.user_data["stop"], db.get_timezone(str(update.effective_user.id)))}
-        🕓 pause:    {dtprint(context.user_data["pause"], db.get_timezone(str(update.effective_user.id)))}
-        🕓 duration: {dtprint(context.user_data["duration"], db.get_timezone(str(update.effective_user.id)))}'''
+    # reset the current recording to be None
+    context.user_data["recording"] = None
     
-    context.user_data["pause"] = timedelta()  # reset pause duration
+    # make aliases
+    _start = context.user_data["logs"][log_id]["start"]
+    _stop = context.user_data["logs"][log_id]["stop"]
+    _pause = context.user_data["logs"][log_id]["pause"]
+    _tz = context.user_data["settings"]["timezone"]
+
+    # generate new text
+    msg_txt = f'''Timer stopped. Log created:
+        📝 project:  {context.user_data["logs"][log_id]["name"]}
+        📅 start:    {timestamp_to_str(_start, tz=_tz)}
+        📅 stop:     {timestamp_to_str(_stop, tz=_tz)}
+        🕓 pause:    {timedelta_to_str(_pause)}
+        🕓 duration: {timedelta_to_str(_stop - _start - _pause)}'''
+    
+    # edit text
     await query.edit_message_text(text=msg_txt, reply_markup=None)
-    return start_over(update, context)
+
+    # start over
+    return await start(update, context, start_over=True)
 
 
 async def pause_timer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    await query.answer()
-    context.user_data["pause_start"] = datetime.now()
-    # context.user_data["pause_start"] = query.message.edit_date
+    # query answer
+    await query.answer(text="Timer paused")
+
+    # get the id of current record
+    log_id = context.user_data["recording"]
+    
+    # get new starting point for pause duration
+    context.user_data["logs"][log_id]["pause"] = now_timestamp() - context.user_data["logs"][log_id]["pause"]
+
+    # edit msg
     await query.edit_message_text(
         text=f'''Timer paused:
-        📝 project: {context.user_data["prj"]}
-        📅 start:  {dtprint(context.user_data["start"], db.get_timezone(str(update.effective_user.id)))}
-        📅 paused: {dtprint(context.user_data["pause_start"], db.get_timezone(str(update.effective_user.id)))}''',
-        reply_markup=InlineKeyboardMarkup(KEYBOARD_TIMER_PAUSED))
+        📝 project: {context.user_data["logs"][log_id]["name"]}
+        📅 start:  {timestamp_to_str(context.user_data["logs"][log_id]["start"])}
+        📅 paused: {timestamp_to_str(now_timestamp())}''',
+        reply_markup=KEYBOARD_TIMER_PAUSED)
     return STATE_START
 
 
 async def resume_timer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    await query.answer()
-    context.user_data["pause_end"] = datetime.now()
-    # context.user_data["pause_end"] = query.message.edit_date
-    if not "pause" in context.user_data:
-        context.user_data["pause"] = timedelta()
-    context.user_data["pause"] += context.user_data["pause_end"] - context.user_data["pause_start"]
+    # answer query
+    await query.answer(text="Timer resumed")
+
+    # get the id of current record
+    log_id = context.user_data["recording"]
+
+    # calculate pause duration
+    context.user_data["logs"][log_id]["pause"] = now_timestamp() - context.user_data["logs"][log_id]["pause"]
+
     await query.edit_message_text(
         text=f'''Timer resumed:
-        📝 project: {context.user_data["prj"]}
-        📅 start:  {dtprint(context.user_data["start"], db.get_timezone(str(update.effective_user.id)))}
-        🕓 pause: {dtprint(context.user_data["pause"], db.get_timezone(str(update.effective_user.id)))}''', reply_markup=InlineKeyboardMarkup(KEYBOARD_TIMER_STARTED))
+        📝 project: {context.user_data["logs"][log_id]["name"]}
+        📅 start:  {timestamp_to_str(context.user_data["logs"][log_id]["start"])}
+        🕓 pause: {timedelta_to_str(context.user_data["logs"][log_id]["pause"])}''',
+        reply_markup=KEYBOARD_TIMER_STARTED)
     return STATE_TIMER_STARTED
 
     
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
+async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
+    
+    # answer query
     await query.answer()
-    await query.edit_message_text(text=db.get_stats(str(user.id)), reply_markup=InlineKeyboardMarkup(KEYBOARD_LOGS))
-    return SECOND
+
+    # logic to aggregate logs
+    aggr_Logs, msg = aggregate_user_logs(context)
+    
+    # update the logs section
+    await query.edit_message_text(text=msg, reply_markup=KEYBOARD_LOGS)
+    return STATE_LOG_MENU_ENTERED
 
 
-async def reset_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
-    db.reset_stats(str(user.id))
+async def reset_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # answer query
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(text="Statistics logs were cleared", reply_markup=None)
-    return start_over(update, context)
+
+    # actually reset logs
+    reset_user_data(context, only_logs=True)
+    
+    # edit the current converasation message
+    await query.edit_message_text(text="User Logs were cleared", reply_markup=None)
+
+    #start a new conversation
+    return await start(update, context, start_over=True)
     
 
-async def start_over(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if query := update.callback_query is not None and update.callback_query.data == "##start_over":  # if we have been rerouted here from "Back"
-        await query.edit_message_text(text="Welcome to Time Tracker", reply_markup=InlineKeyboardMarkup(KEYBOARD_START))
-    else:
-        await context.bot.send_message(update.effective_user.id, text="Welcome to Time Tracker", reply_markup=InlineKeyboardMarkup(KEYBOARD_START))
-    return STATE_START
-
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
-    msg = f"Following Projects are registered:\n"+'\n'.join(['\t'+prj for prj in db.get_projects(str(user.id))])
-    await update.callback_query.edit_message_text(text=msg, reply_markup=InlineKeyboardMarkup(KEYBOARD_SETTINGS))
-    return SECOND
+    # answer query
+    query = update.callback_query
+    await query.answer()
+
+    # generate a display message
+    msg = f'Settings:\n' + '-'*60 + '\n\tTimezone: +' + str(context.user_data["settings"]["timezone"]) + ' GMT' + '\n\tProjects:'
+    for prj in sorted(context.user_data["settings"]["projects"]):
+        msg += "\n\t\t"+prj
+
+    # edit the msg text
+    await query.edit_message_text(text=msg, reply_markup=KEYBOARD_SETTINGS)
+
+    return STATE_SETTINGS_OPENED
+
 
 async def settings_remove_project_choose(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
-    keyboard = [[InlineKeyboardButton(pr, callback_data=pr)] for pr in db.get_projects(str(user.id))]
+    # answer query
+    query = update.callback_query
+    await query.answer()
+
+
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(pr, callback_data=pr)] for pr in sorted(context.user_data["settings"]["projects"])])
     msg = "Choose a project to delete from database (entries will be preserved)"
-    await update.callback_query.edit_message_text(text=msg, reply_markup=InlineKeyboardMarkup(keyboard))
-    return STATE_REMOVING_PROJECT
+    await update.callback_query.edit_message_text(text=msg, reply_markup=keyboard)
+    
+    return STATE_SETTINGS_DEL_PRJ
 
 
-def settings_remove_project_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
-    prj: str = update.callback_query.data
-    db.remove_project(str(user.id), prj)
-    update.callback_query.data = "##start_over"  #overwrite callback data to toggle desired behaviour in start_over
-    return start_over(update, context)
+async def settings_remove_project_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # answer query
+    query = update.callback_query
+    await query.answer(text=f"Project {query.data} deleted from database")
+
+    # delete project from database, it was saved in query.data
+    context.user_data["settings"]["projects"].remove(query.data)
+    
+    # start new conversation
+    return await start(update, context)
 
 
 async def settings_add_project_choose(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
+    # answer query
+    query = update.callback_query
+    await query.answer()
+
     msg = "Please type a name of your new project"
     await update.callback_query.edit_message_text(text=msg, reply_markup=None)
+
     return STATE_ADDING_PROJECT
 
 
-def settings_add_project_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
-    db.add_project(str(user.id), update.message.text)
-    return start_over(update, context)
+async def settings_add_project_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # NOTE no need to answer query, since no inline-keyboard button was presses
+    logger.info(f"settings_add_project_confirm {update.message.text}")
+
+    # add project to the database
+    if not (prj := update.message.text) in context.user_data["settings"]["projects"]:
+        context.user_data["settings"]["projects"].append(prj)
+
+    return await start(update, context)
 
 
 async def settings_set_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
-    msg = f"Current timezone offset is set to +{db.get_timezone(str(update.effective_user.id))}.\n\nPlease enter the new timezone offset (set 0 for UTC)"
+    # answer query
+    query = update.callback_query
+    await query.answer()
+
+    msg = f'Current timezone: +{context.user_data["settings"]["timezone"]} GMT.\n\nPlease enter new timezone (set 0 for UTC)'
     await update.callback_query.edit_message_text(text=msg, reply_markup=None)
+
     return STATE_SETTING_TZ
 
-async def settings_set_timezone_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
-    try:
-        offset = int(update.message.text)
-    except:
-        await update.callback_query.edit_message_text(text="Please enter an integer!", reply_markup=None)
-        return STATE_SETTING_TZ
 
-    db.set_timezone(str(user.id), offset)
-    return start_over(update, context)
+async def settings_set_timezone_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        tz = int(update.message.text)
+    except ValueError:  # if we try to convert a string
+        #await update.callback_query.edit_message_text(text="Please enter an integer!", reply_markup=None)
+        return STATE_SETTING_TZ
+    
+    context.user_data["settings"]["timezone"] = tz
+    return await start(update, context)
 
 
 def main(BOT_API_TOKEN) -> None:
     """Run the bot."""
-    application = Application.builder().token(BOT_API_TOKEN).build()
+    database = PicklePersistence(filepath='db')
+
+    application = Application.builder().token(BOT_API_TOKEN).persistence(persistence=database).build()
 
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
             STATE_START: [
-                CallbackQueryHandler(record, pattern='^' + str(ONE) + '$'),
-                CallbackQueryHandler(stats, pattern='^' + str(TWO) + '$'),
-                CallbackQueryHandler(resume_timer, pattern="##resume_timer"),
-                CallbackQueryHandler(settings, pattern="##settings"),
+                CallbackQueryHandler(record, pattern=GOTO_RECORD),
+                CallbackQueryHandler(logs, pattern=GOTO_LOGS),
+                CallbackQueryHandler(resume_timer, pattern=GOTO_TIMER_RESUME),
+                CallbackQueryHandler(settings, pattern=GOTO_SETTINGS),
             ],
-            SECOND: [
-                CallbackQueryHandler(reset_stats, pattern='##reset_stats'),
-                CallbackQueryHandler(start_over, pattern='##start_over'),
-                CallbackQueryHandler(settings_add_project_choose, pattern='##settings_add_project'),
-                CallbackQueryHandler(settings_remove_project_choose, pattern='##settings_remove_project'),
-                CallbackQueryHandler(settings_set_timezone, pattern='##timezone'),
+            STATE_SETTINGS_OPENED: [
+                CallbackQueryHandler(settings_add_project_choose, pattern=GOTO_SETTINGS_ADD_PRJ),
+                CallbackQueryHandler(settings_remove_project_choose, pattern=GOTO_SETTINGS_DEL_PRJ),
+                CallbackQueryHandler(settings_set_timezone, pattern=GOTO_SETTINGS_SET_TZ),
+                CallbackQueryHandler(start, pattern=GOTO_MAIN_MENU),
+            ],
+            STATE_PRJ_SELECTED: [
+                CallbackQueryHandler(start, pattern=GOTO_MAIN_MENU),
                 CallbackQueryHandler(start_timer),
             ],
+            STATE_LOG_MENU_ENTERED: [
+                CallbackQueryHandler(reset_logs, pattern=GOTO_RESET),
+                CallbackQueryHandler(start, pattern=GOTO_MAIN_MENU),
+            ],
             STATE_TIMER_STARTED: [
-                CallbackQueryHandler(pause_timer, pattern="##pause_timer"),
-                CallbackQueryHandler(stop_timer, pattern="##stop_timer"),
+                CallbackQueryHandler(pause_timer, pattern=GOTO_TIMER_PAUSE),
+                CallbackQueryHandler(stop_timer, pattern=GOTO_TIMER_STOP),
             ],
             STATE_ADDING_PROJECT: [
                 MessageHandler(filters.ALL, settings_add_project_confirm),
             ],
-            STATE_REMOVING_PROJECT: [
+            STATE_SETTINGS_DEL_PRJ: [
                 CallbackQueryHandler(settings_remove_project_confirm),
             ],
             STATE_SETTING_TZ: [
@@ -288,7 +405,7 @@ def main(BOT_API_TOKEN) -> None:
     application.add_handler(conv_handler)
 
     # Start the Bot
-    application.run_polling()
+    #application.run_polling()
 
     return application
 

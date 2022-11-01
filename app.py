@@ -13,6 +13,7 @@ def index():
 
 
 if __name__ == "__main__":
-  bot.main(API_TOKEN)
+  bot_app = bot.main(API_TOKEN)
+  bot_app.run_polling()
   app.run(host='0.0.0.0', port=81)
 
