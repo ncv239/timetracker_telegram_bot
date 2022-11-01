@@ -29,7 +29,7 @@ from helpers import now_timestamp, timestamp_to_str, timedelta_to_str, aggregate
 
 
 # Enable logging
-logging.basicConfig(encoding='utf-8', format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
