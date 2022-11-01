@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta
 from telegram.ext import ContextTypes
 from itertools import groupby
-from typing import Tuple
-
+from typing import Tuple, List
+import csv
 
 
 PROJECTLIST = [
@@ -18,7 +18,7 @@ def now_timestamp() -> int:
     return int(round(datetime.now().timestamp()))
 
 
-def timestamp_to_str(ts: int, tz: int = 0, fmt: str = "%d-%m-%Y %H:%M") -> str:
+def timestamp_to_str(ts: int, tz: int = 0, fmt: str = "%d.%m.%Y %H:%M") -> str:
     ''' convert a epoch timestamp to a human-readable string representation
     Args:
         ts : int - timestamp in seconds
@@ -51,6 +51,44 @@ def aggregate_user_logs(context: ContextTypes.DEFAULT_TYPE) -> Tuple[dict, str]:
         msg += f"📝 {prj_name} ({out[prj_name]['n_logs']:3d} logs): {timedelta_to_str(out[prj_name]['duration'])}\n"
 
     return (out, msg)
+
+
+def list_user_logs(context: ContextTypes.DEFAULT_TYPE) -> Tuple[list, str]:
+    rows = []
+    header = ["id", "START", "STOP", "PROJECT", "DURATION", "PAUSE"]
+    rows.append(header)
+    rows_to_print = []
+    header_to_print = ["START", "STOP", "PROJECT", "DURATION"]
+    rows_to_print.append(header_to_print)
+    rows_to_print.append("-" * 60)  # horizontal line
+    
+    # generate data
+    for i, log in enumerate(context.user_data["logs"].values()):
+        row = [str(i), timestamp_to_str(log["start"]), timestamp_to_str(log["stop"]), log["name"], timedelta_to_str(log["stop"] - log["start"] - log["pause"]), timedelta_to_str(log["pause"])]
+        row_to_print = [timestamp_to_str(log["start"]), timestamp_to_str(log["stop"]), log["name"], timedelta_to_str(log["stop"] - log["start"] - log["pause"])]
+        rows.append(row)
+        rows_to_print.append(row_to_print)
+
+    # create a message
+    msg = ""
+    for row in rows_to_print:
+        if isinstance(row, str):
+            msg += row+'\n'
+            continue
+
+        line = " - ".join(row)
+        line += '\n'
+        msg += line
+
+    return rows, msg
+
+
+def save_list_of_rows_to_csv(list_of_rows: List[list], filename: str = "dummy.csv") -> str:
+    ''' function saves a list of lists into CSV file'''
+    with open(filename, "w") as f:
+        writer = csv.writer(f)
+        writer.writerows(list_of_rows)
+    return filename
 
 
 def reset_user_data(context: ContextTypes.DEFAULT_TYPE, only_logs=False) -> None:

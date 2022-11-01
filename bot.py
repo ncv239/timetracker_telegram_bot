@@ -25,7 +25,7 @@ from telegram.ext import (
     PicklePersistence
 )
 
-from helpers import now_timestamp, timestamp_to_str, timedelta_to_str, aggregate_user_logs, init_user_data, reset_user_data
+from helpers import now_timestamp, timestamp_to_str, timedelta_to_str, aggregate_user_logs, init_user_data, reset_user_data, list_user_logs, save_list_of_rows_to_csv
 
 
 # Enable logging
@@ -40,8 +40,8 @@ STATE_SETTING_TZ, STATE_PRJ_SELECTED, STATE_LOG_MENU_ENTERED, STATE_SETTINGS_OPE
 
 # Callback data
 GOTO_RECORD, GOTO_LOGS, GOTO_SETTINGS, GOTO_TIMER_PAUSE, GOTO_TIMER_STOP, \
-GOTO_TIMER_RESUME, GOTO_RESET, \
-GOTO_MAIN_MENU, GOTO_SETTINGS_ADD_PRJ, GOTO_SETTINGS_DEL_PRJ, GOTO_SETTINGS_SET_TZ = [str(i) for i in range(11)]
+GOTO_TIMER_RESUME, GOTO_RESET, GOTO_LOGS_LIST, \
+GOTO_MAIN_MENU, GOTO_SETTINGS_ADD_PRJ, GOTO_SETTINGS_DEL_PRJ, GOTO_SETTINGS_SET_TZ = [str(i) for i in range(12)]
 
 
 
@@ -64,6 +64,8 @@ KEYBOARD_TIMER_PAUSED = InlineKeyboardMarkup([[
     ]])
 
 KEYBOARD_LOGS = InlineKeyboardMarkup([[
+        InlineKeyboardButton("List all logs", callback_data=GOTO_LOGS_LIST),
+    ],[
         InlineKeyboardButton("🗑 Reset", callback_data=GOTO_RESET),
         InlineKeyboardButton("↩ Back", callback_data=GOTO_MAIN_MENU),
     ]])
@@ -157,7 +159,7 @@ async def start_timer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         text=f'''Timer started
         📝 project: {context.user_data["logs"][log_id]["name"]}
         📅 start: {timestamp_to_str(context.user_data["logs"][log_id]["start"], tz=context.user_data["settings"]["timezone"],
-                    fmt="%d-%m-%Y %H:%M:%S")}''',
+                    fmt="%d.%m.%Y %H:%M:%S")}''',
         reply_markup=KEYBOARD_TIMER_STARTED)
 
     return STATE_TIMER_STARTED
@@ -248,6 +250,22 @@ async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     # update the logs section
     await query.edit_message_text(text=msg, reply_markup=KEYBOARD_LOGS)
+    return STATE_LOG_MENU_ENTERED
+
+
+async def logs_list_table(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    # answer query
+    await query.answer()
+
+    # logic to aggregate logs
+    log_list, msg = list_user_logs(context)
+    filename = save_list_of_rows_to_csv(log_list, "export.csv")
+    
+    # update the logs section
+    
+    await query.edit_message_text(text=msg, reply_markup=KEYBOARD_LOGS)
+    await context.bot.send_document(query["message"]["chat"].id, document=open(filename, "rb"))
     return STATE_LOG_MENU_ENTERED
 
 
@@ -378,6 +396,7 @@ def main(BOT_API_TOKEN) -> None:
                 CallbackQueryHandler(start_timer),
             ],
             STATE_LOG_MENU_ENTERED: [
+                CallbackQueryHandler(logs_list_table, pattern=GOTO_LOGS_LIST),
                 CallbackQueryHandler(reset_logs, pattern=GOTO_RESET),
                 CallbackQueryHandler(start, pattern=GOTO_MAIN_MENU),
             ],
