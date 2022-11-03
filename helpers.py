@@ -1,16 +1,6 @@
 from datetime import datetime, timedelta
-from telegram.ext import ContextTypes
-from itertools import groupby
 from typing import Tuple, List
 import csv
-
-
-PROJECTLIST = [
-    "Work",
-    "Sport",
-    "Education",
-    "Portfolio"
-]
 
 
 def now_timestamp() -> int:

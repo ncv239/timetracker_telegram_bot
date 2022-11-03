@@ -1,5 +1,16 @@
 from replit import db
 from helpers import now_timestamp, timestamp_to_str, timedelta_to_str
+from telegram.ext import ContextTypes
+from itertools import groupby
+from typing import Tuple, List
+
+
+PROJECTLIST = [
+    "Work",
+    "Sport",
+    "Education",
+    "Portfolio"
+]
 
 
 class Storage():
