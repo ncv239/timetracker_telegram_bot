@@ -1,5 +1,6 @@
 import logging
 from uuid import uuid4
+import os
 
 from telegram import __version__ as TG_VER
 try:
@@ -29,7 +30,7 @@ from helpers import now_timestamp, timestamp_to_str, timedelta_to_str, aggregate
 
 
 # Enable logging
-logging.basicConfig(filename="log.log", format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
@@ -273,10 +274,13 @@ async def logs_list_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # logic to aggregate logs
     log_list, msg = list_user_logs(context)
+    # create a csv file
     filename = save_list_of_rows_to_csv(log_list, "export.csv")
-    
     # update the logs section
     await context.bot.send_document(query["message"]["chat"].id, document=open(filename, "rb"))
+    # remove the csv file
+    os.remove(filename)
+
     return STATE_LOG_MENU_ENTERED
 
 
@@ -424,6 +428,9 @@ def main(BOT_API_TOKEN) -> None:
             ],
             STATE_SETTING_TZ: [
                 MessageHandler(filters.ALL, settings_set_timezone_confirm),
+            ],
+            ConversationHandler.TIMEOUT:  [
+                MessageHandler(None, start),
             ],
         },
         fallbacks=[CommandHandler('start', start)],
