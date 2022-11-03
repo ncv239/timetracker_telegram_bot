@@ -26,8 +26,11 @@ from telegram.ext import (
     PicklePersistence
 )
 
-from helpers import now_timestamp, timestamp_to_str, timedelta_to_str, aggregate_user_logs, init_user_data, reset_user_data, list_user_logs, save_list_of_rows_to_csv
+from helpers import now_timestamp, timestamp_to_str, timedelta_to_str, save_list_of_rows_to_csv
+from db import Storage
 
+# connect to repltit database
+db = Storage()
 
 # Enable logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
@@ -100,8 +103,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE, start_over: 
         logger.info("User %s started the conversation.", user.username)
         logger.info("update.message is not None")
 
-        # create initial user database
-        init_user_data(context)
+        # create and init user database
+        db.add_user(update.effective_user.id)
+
         # send a new message and start a conversation
         await context.bot.send_message(update.effective_user.id, text="Welcome to Time Tracker", reply_markup=KEYBOARD_START)
 
@@ -112,7 +116,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE, start_over: 
         query = update.callback_query
         if query and not start_over:  # user pressed inline-keyboard-btn and we receive a query
             logger.info("update.callback_query is not None")
-            logger.info(query.to_json())
             # answer the query
             await query.answer()
             # update the current conversation message
@@ -127,9 +130,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE, start_over: 
 async def record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # answer a query (when user clicked an inline-button)
     await update.callback_query.answer()
-    logger.info(f"RECORD PRESSED: upd={update.to_json()}")
+    # get useer data from replit database
+    user_data = db.user_data(update.effective_user.id)
     # build a keyboard with list of all projects from user database, note that the project name will be send as a callback_data
-    keyboard = [[InlineKeyboardButton(prj, callback_data=prj)] for prj in context.user_data["settings"]["projects"]]
+    keyboard = [[InlineKeyboardButton(prj, callback_data=prj)] for prj in user_data["settings"]["projects"]]
     keyboard.append([InlineKeyboardButton("↩ Back", callback_data=GOTO_MAIN_MENU)])
 
     # update message and a keyboard
@@ -144,24 +148,25 @@ async def start_timer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     # answer the query
     await query.answer()
-
+    # get useer data from replit database
+    user_data = db.user_data(update.effective_user.id)
     # start a log entry
     log_id = uuid4()
-    context.user_data["logs"][log_id] = {}
-    #context.user_data["logs"][log_id]["start"] = query.message.edit_date  # integer, epoch time
-    context.user_data["logs"][log_id]["name"] = query.data  # name of the project (callback data)
-    context.user_data["logs"][log_id]["start"] = now_timestamp()  # integer, epoch time
-    context.user_data["logs"][log_id]["stop"] = context.user_data["logs"][log_id]["start"]  # DEFAULT VALUE
-    context.user_data["logs"][log_id]["pause"] = 0
+    user_data["logs"][log_id] = {}
+    #user_data["logs"][log_id]["start"] = query.message.edit_date  # integer, epoch time
+    user_data["logs"][log_id]["name"] = query.data  # name of the project (callback data)
+    user_data["logs"][log_id]["start"] = now_timestamp()  # integer, epoch time
+    user_data["logs"][log_id]["stop"] = user_data["logs"][log_id]["start"]  # DEFAULT VALUE
+    user_data["logs"][log_id]["pause"] = 0
 
     # store the key of current log for quick access
-    context.user_data["recording"] = log_id
+    user_data["recording"] = log_id
 
     # edit the message
     await query.edit_message_text(
         text=f'''Timer started
-        📝 project: {context.user_data["logs"][log_id]["name"]}
-        📅 start: {timestamp_to_str(context.user_data["logs"][log_id]["start"], tz=context.user_data["settings"]["timezone"],
+        📝 project: {user_data["logs"][log_id]["name"]}
+        📅 start: {timestamp_to_str(user_data["logs"][log_id]["start"], tz=user_data["settings"]["timezone"],
                     fmt="%d.%m.%Y %H:%M:%S")}''',
         reply_markup=KEYBOARD_TIMER_STARTED)
 
@@ -172,23 +177,24 @@ async def stop_timer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # answer the query
     query = update.callback_query
     await query.answer(text="Timer stopped")
-
+    # get useer data from replit database
+    user_data = db.user_data(update.effective_user.id)
     # add stop log to the user_data
-    log_id = context.user_data["recording"]
-    context.user_data["logs"][log_id]["stop"] = now_timestamp()
+    log_id = user_data["recording"]
+    user_data["logs"][log_id]["stop"] = now_timestamp()
 
     # reset the current recording to be None
-    context.user_data["recording"] = None
+    user_data["recording"] = None
     
     # make aliases
-    _start = context.user_data["logs"][log_id]["start"]
-    _stop = context.user_data["logs"][log_id]["stop"]
-    _pause = context.user_data["logs"][log_id]["pause"]
-    _tz = context.user_data["settings"]["timezone"]
+    _start = user_data["logs"][log_id]["start"]
+    _stop = user_data["logs"][log_id]["stop"]
+    _pause = user_data["logs"][log_id]["pause"]
+    _tz = user_data["settings"]["timezone"]
 
     # generate new text
     msg_txt = f'''Timer stopped. Log created:
-        📝 project:  {context.user_data["logs"][log_id]["name"]}
+        📝 project:  {user_data["logs"][log_id]["name"]}
         📅 start:    {timestamp_to_str(_start, tz=_tz)}
         📅 stop:     {timestamp_to_str(_stop, tz=_tz)}
         🕓 pause:    {timedelta_to_str(_pause)}
@@ -205,18 +211,20 @@ async def pause_timer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     query = update.callback_query
     # query answer
     await query.answer(text="Timer paused")
+    # get useer data from replit database
+    user_data = db.user_data(update.effective_user.id)
 
     # get the id of current record
-    log_id = context.user_data["recording"]
+    log_id = user_data["recording"]
     
     # get new starting point for pause duration
-    context.user_data["logs"][log_id]["pause"] = now_timestamp() - context.user_data["logs"][log_id]["pause"]
+    user_data["logs"][log_id]["pause"] = now_timestamp() - user_data["logs"][log_id]["pause"]
 
     # edit msg
     await query.edit_message_text(
         text=f'''Timer paused:
-        📝 project: {context.user_data["logs"][log_id]["name"]}
-        📅 start:  {timestamp_to_str(context.user_data["logs"][log_id]["start"])}
+        📝 project: {user_data["logs"][log_id]["name"]}
+        📅 start:  {timestamp_to_str(user_data["logs"][log_id]["start"])}
         📅 paused: {timestamp_to_str(now_timestamp())}''',
         reply_markup=KEYBOARD_TIMER_PAUSED)
     return STATE_START
@@ -226,18 +234,20 @@ async def resume_timer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     query = update.callback_query
     # answer query
     await query.answer(text="Timer resumed")
+    # get useer data from replit database
+    user_data = db.user_data(update.effective_user.id)
 
     # get the id of current record
-    log_id = context.user_data["recording"]
+    log_id = user_data["recording"]
 
     # calculate pause duration
-    context.user_data["logs"][log_id]["pause"] = now_timestamp() - context.user_data["logs"][log_id]["pause"]
+    user_data["logs"][log_id]["pause"] = now_timestamp() - user_data["logs"][log_id]["pause"]
 
     await query.edit_message_text(
         text=f'''Timer resumed:
-        📝 project: {context.user_data["logs"][log_id]["name"]}
-        📅 start:  {timestamp_to_str(context.user_data["logs"][log_id]["start"])}
-        🕓 pause: {timedelta_to_str(context.user_data["logs"][log_id]["pause"])}''',
+        📝 project: {user_data["logs"][log_id]["name"]}
+        📅 start:  {timestamp_to_str(user_data["logs"][log_id]["start"])}
+        🕓 pause: {timedelta_to_str(user_data["logs"][log_id]["pause"])}''',
         reply_markup=KEYBOARD_TIMER_STARTED)
     return STATE_TIMER_STARTED
 
@@ -249,7 +259,7 @@ async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.answer()
 
     # logic to aggregate logs
-    aggr_Logs, msg = aggregate_user_logs(context)
+    aggr_Logs, msg = db.aggregate_user_logs(update.effective_user.id)
     
     # update the logs section
     await query.edit_message_text(text=msg, reply_markup=KEYBOARD_LOGS)
@@ -262,7 +272,7 @@ async def logs_list_table(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
 
     # logic to aggregate logs
-    log_list, msg = list_user_logs(context)
+    log_list, msg = db.list_user_logs(update.effective_user.id)
     # update the logs section
     await query.edit_message_text(text=msg, reply_markup=KEYBOARD_LOGS)
     return STATE_LOG_MENU_ENTERED
@@ -273,7 +283,7 @@ async def logs_list_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.answer()
 
     # logic to aggregate logs
-    log_list, msg = list_user_logs(context)
+    log_list, msg = db.list_user_logs(update.effective_user.id)
     # create a csv file
     filename = save_list_of_rows_to_csv(log_list, "export.csv")
     # update the logs section
@@ -290,7 +300,7 @@ async def reset_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.answer()
 
     # actually reset logs
-    reset_user_data(context, only_logs=True)
+    db.reset_user_data(update.effective_user.id, only_logs=True)
     
     # edit the current converasation message
     await query.edit_message_text(text="User Logs were cleared", reply_markup=None)
@@ -303,10 +313,12 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # answer query
     query = update.callback_query
     await query.answer()
+    # get user data from replit database
+    user_data = db.user_data(update.effective_user.id)
 
     # generate a display message
-    msg = f'Settings:\n' + '-'*60 + '\n\tTimezone: +' + str(context.user_data["settings"]["timezone"]) + ' GMT' + '\n\tProjects:'
-    for prj in sorted(context.user_data["settings"]["projects"]):
+    msg = f'Settings:\n' + '-'*60 + '\n\tTimezone: +' + str(user_data["settings"]["timezone"]) + ' GMT' + '\n\tProjects:'
+    for prj in sorted(user_data["settings"]["projects"]):
         msg += "\n\t\t"+prj
 
     # edit the msg text
@@ -319,9 +331,10 @@ async def settings_remove_project_choose(update: Update, context: ContextTypes.D
     # answer query
     query = update.callback_query
     await query.answer()
+    # get user data from replit database
+    user_data = db.user_data(update.effective_user.id)
 
-
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(pr, callback_data=pr)] for pr in sorted(context.user_data["settings"]["projects"])])
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(pr, callback_data=pr)] for pr in sorted(user_data["settings"]["projects"])])
     msg = "Choose a project to delete from database (entries will be preserved)"
     await update.callback_query.edit_message_text(text=msg, reply_markup=keyboard)
     
@@ -332,9 +345,10 @@ async def settings_remove_project_confirm(update: Update, context: ContextTypes.
     # answer query
     query = update.callback_query
     await query.answer(text=f"Project {query.data} deleted from database")
-
+    # get user data from replit database
+    user_data = db.user_data(update.effective_user.id)
     # delete project from database, it was saved in query.data
-    context.user_data["settings"]["projects"].remove(query.data)
+    user_data["settings"]["projects"].remove(query.data)
     
     # start new conversation
     return await start(update, context)
@@ -354,10 +368,11 @@ async def settings_add_project_choose(update: Update, context: ContextTypes.DEFA
 async def settings_add_project_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # NOTE no need to answer query, since no inline-keyboard button was presses
     logger.info(f"settings_add_project_confirm {update.message.text}")
-
+    # get user data from replit database
+    user_data = db.user_data(update.effective_user.id)
     # add project to the database
-    if not (prj := update.message.text) in context.user_data["settings"]["projects"]:
-        context.user_data["settings"]["projects"].append(prj)
+    if not (prj := update.message.text) in user_data["settings"]["projects"]:
+        user_data["settings"]["projects"].append(prj)
 
     return await start(update, context)
 
@@ -366,8 +381,9 @@ async def settings_set_timezone(update: Update, context: ContextTypes.DEFAULT_TY
     # answer query
     query = update.callback_query
     await query.answer()
-
-    msg = f'Current timezone: +{context.user_data["settings"]["timezone"]} GMT.\n\nPlease enter new timezone (set 0 for UTC)'
+    # get user data from replit database
+    user_data = db.user_data(update.effective_user.id)
+    msg = f'Current timezone: +{user_data["settings"]["timezone"]} GMT.\n\nPlease enter new timezone (set 0 for UTC)'
     await update.callback_query.edit_message_text(text=msg, reply_markup=None)
 
     return STATE_SETTING_TZ
@@ -379,8 +395,9 @@ async def settings_set_timezone_confirm(update: Update, context: ContextTypes.DE
     except ValueError:  # if we try to convert a string
         #await update.callback_query.edit_message_text(text="Please enter an integer!", reply_markup=None)
         return STATE_SETTING_TZ
-    
-    context.user_data["settings"]["timezone"] = tz
+    # get user data from replit database
+    user_data = db.user_data(update.effective_user.id)
+    user_data["settings"]["timezone"] = tz
     return await start(update, context)
 
 
