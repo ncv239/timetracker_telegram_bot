@@ -87,7 +87,7 @@ KEYBOARD_SETTINGS = InlineKeyboardMarkup([[
 
 
 
-
+# Define Callback-Functions
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE, start_over: bool = False) -> int:
     ''' Initial callback function when we want to start the bot
 
@@ -151,7 +151,7 @@ async def start_timer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     # get useer data from replit database
     user_data = db.user_data(update.effective_user.id)
     # start a log entry
-    log_id = uuid4()
+    log_id = str(uuid4())
     user_data["logs"][log_id] = {}
     #user_data["logs"][log_id]["start"] = query.message.edit_date  # integer, epoch time
     user_data["logs"][log_id]["name"] = query.data  # name of the project (callback data)
@@ -403,9 +403,7 @@ async def settings_set_timezone_confirm(update: Update, context: ContextTypes.DE
 
 def main(BOT_API_TOKEN) -> None:
     """Run the bot."""
-    database = PicklePersistence(filepath='db')
-
-    application = Application.builder().token(BOT_API_TOKEN).persistence(persistence=database).build()
+    application = Application.builder().token(BOT_API_TOKEN).build()
 
 
     conv_handler = ConversationHandler(
@@ -458,5 +456,6 @@ def main(BOT_API_TOKEN) -> None:
 
     # Start the Bot
     #application.run_polling()
-
+    for k in db.db.keys():
+        del db.db[k]
     return application

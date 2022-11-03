@@ -14,26 +14,32 @@ PROJECTLIST = [
 
 
 class Storage():
+    ''' A wrapper to the replit internal database. Note that in order to use it outside REPLIT platform,
+    you must provide a URL to the storage (line `self.db = db` will not work)
+    '''
     def __init__(self):
         self.db = db
     
-    def add_user(self, user_id: str):
+    def add_user(self, user_id: int):
+        user_id = str(user_id)
         if user_id not in self.db.keys():
             self.db[user_id] = {}
             self.init_user_data(user_id)
         else:
             print(f"Cannot add user with the Id {user_id}. This Id already exists in the Database")
     
-    def user_data(self, user_id: str) -> dict:
+    def user_data(self, user_id: int) -> dict:
+        user_id = str(user_id)
         if user_id not in self.db.keys():
             self.add_user(user_id)
         return self.db[user_id]
     
 
-    def init_user_data(self, user_id: str) -> None:
+    def init_user_data(self, user_id: int) -> None:
         ''' Function to initialise the data-structure of the current TG-User
         '''
-        if not "settings" in self.user_data(user_id).keys():
+        user_id = str(user_id)
+        if not "settings" in self.db[user_id].keys():
             self.db[user_id]["settings"] = {}
             self.db[user_id]["settings"]["timezone"] = 0
             self.db[user_id]["settings"]["projects"] = PROJECTLIST
@@ -42,9 +48,10 @@ class Storage():
         
         self.db[user_id]["recording"] = None  # a placeholder to hold the ID of the current log
 
-    def reset_user_data(user_id: str, only_logs: bool=False) -> None:
+    def reset_user_data(self, user_id: int, only_logs: bool=False) -> None:
         ''' Function to clear the data of the current TG-User
         '''
+        user_id = str(user_id)
         if only_logs:
             self.db[user_id]["logs"].clear()
             self.db[user_id]["recording"] = None
@@ -53,9 +60,10 @@ class Storage():
             self.init_user_data(user_id)
 
 
-    def aggregate_user_logs(self, user_id: str) -> Tuple[dict, str]:
+    def aggregate_user_logs(self, user_id: int) -> Tuple[dict, str]:
         ''' Cerate a summary of user logs and return a dictionary + a string
         '''
+        user_id = str(user_id)
         data = self.db[user_id]["logs"].values()
         out = {}
 
@@ -75,7 +83,10 @@ class Storage():
         return (out, msg)
 
 
-    def list_user_logs(self, user_id: str) -> Tuple[list, str]:
+    def list_user_logs(self, user_id: int) -> Tuple[list, str]:
+        ''' Helper function to collect user logs into a 2-d table (list of rows) and a string-representation
+        '''
+        user_id = str(user_id)
         rows = []
         header = ["id", "START", "STOP", "PROJECT", "DURATION", "PAUSE"]
         rows.append(header)
@@ -103,8 +114,3 @@ class Storage():
             msg += line
 
         return rows, msg
-
-
-
-    def user_data():
-        update.effective_user.id
