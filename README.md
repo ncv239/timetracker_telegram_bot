@@ -1,8 +1,6 @@
 # Yet another Time Tracker Telegram Bot
 
-## Video Demo: <URL>
-## Live Demo: [TimeTrackerNCV_bot](https://t.me/TimeTrackerNCV_bot)
-## REPLIT Demo: [link](https://replit.com/@ncv239/TelegramBot-FlaskServer)
+[Youtube Demo](https://youtu.be/ISSHWr3Guss); Telegram Demo -  [@TimeTrackerNCV_bot](https://t.me/TimeTrackerNCV_bot); [REPL.IT Demo](https://replit.com/@ncv239/TelegramBot-FlaskServer)
 
 ## Summary:
 A [telegram bot](https://core.telegram.org/bots) that helps you to track time spend on diffent projects and helps me (hopefully) to pass the final project submission of the [CS50 Harvard Course](https://cs50.harvard.edu/x/2022/).
